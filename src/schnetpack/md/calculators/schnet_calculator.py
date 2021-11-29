@@ -281,10 +281,15 @@ class SchnetPackCalculator(MDCalculator):
         # Check for different models, cutoff is set in different functions
         if isinstance(representation, schnetpack.representation.SchNet):
             model_cutoff = representation.interactions[0].cutoff_network.cutoff
+            model_cutoff = float(model_cutoff[0].cpu().numpy())
         elif isinstance(representation, schnetpack.representation.BehlerSFBlock):
             model_cutoff = representation.cutoff.cutoff
+            model_cutoff = float(model_cutoff[0].cpu().numpy())
         elif isinstance(representation, schnetpack.representation.StandardizeSF):
             model_cutoff = representation.SFBlock.cutoff.cutoff
+            model_cutoff = float(model_cutoff[0].cpu().numpy())
+        elif isinstance(representation, schnetpack.md.calculators.PairwiseRepresentation):#!
+            model_cutoff = -1#self.model.output_modules.cutoff#representation.cutoff.cutoff#!
         else:
             raise ValueError(
                 "Unrecognized model representation {:s }for cutoff detection.".format(
@@ -293,7 +298,7 @@ class SchnetPackCalculator(MDCalculator):
             )
 
         # Convert from torch tensor and print out the detected cutoff
-        model_cutoff = float(model_cutoff[0].cpu().numpy())
+        # model_cutoff = float(model_cutoff[0].cpu().numpy())#!  
         logging.info("Detected cutoff radius of {:5.3f}...".format(model_cutoff))
 
         return model_cutoff

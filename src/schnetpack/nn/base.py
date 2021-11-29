@@ -181,6 +181,7 @@ class Aggregate(nn.Module):
 
         """
         # mask input
+        mask = None#!
         if mask is not None:
             input = input * mask[..., None]
         # compute sum of input along axis

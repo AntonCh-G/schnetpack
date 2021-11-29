@@ -27,6 +27,8 @@ class MDNeighborList:
         # Check cutoff and shell, as well as possible conventions
         self.cutoff = cutoff
         self.shell = shell
+        print ('init self.shell',self.shell)#!
+        print ('init self.cutoff',self.cutoff)#!
 
         if self.cutoff is not None:
             if self.shell is not None:
@@ -53,9 +55,10 @@ class MDNeighborList:
         Returns:
             tuple: Contains the neighbor list and neighbor mask tensors.
         """
+        
         if self._update_required(system) or self.neighbor_list is None:
             self._construct_neighbor_list(system)
-
+        
         return self.neighbor_list, self.neighbor_mask, self.offsets
 
     def _construct_neighbor_list(self, system):
@@ -90,7 +93,7 @@ class MDNeighborList:
             torch.norm(system.positions - self.last_positions, 2, 3)
         ).detach()
         if max_displacement >= self.shell:
-            return True
+            return False#! True
 
         return False
 
@@ -181,7 +184,7 @@ class EnvironmentProviderNeighborList(MDNeighborList):
     Args:
         cutoff (float): Cutoff radius used for neighbor list construction.
         shell (float): Buffer region around the cutoff radius. A new neighbor list is only constructed if an atom
-                       moves farther than this shell. (Or if the simulation cell changes.)
+                    moves farther than this shell. (Or if the simulation cell changes.)
     """
 
     def __init__(self, cutoff, shell=1.0, device=None, use_internal_units=True):
@@ -216,17 +219,17 @@ class EnvironmentProviderNeighborList(MDNeighborList):
         stored to check if updates of the neighbor list are necessary.
         """
         atoms = system.get_ase_atoms(internal_units=self.use_internal_units)
-
+        
         neighbor_idx = []
         offsets = []
         max_neighbors = 0
-
+        
         for mol in atoms:
-            nbh_idx, offset = self._environment_provider.get_environment(mol)
+            nbh_idx, offset = self._environment_provider.get_environment(mol)#?
             neighbor_idx.append(nbh_idx)
             offsets.append(offset)
             max_neighbors = max(max_neighbors, nbh_idx.shape[1])
-
+        
         self.neighbor_list = -torch.ones(
             system.n_replicas,
             system.n_molecules,
@@ -234,7 +237,7 @@ class EnvironmentProviderNeighborList(MDNeighborList):
             max_neighbors,
             device=system.device,
         ).long()
-
+        
         self.offsets = torch.zeros(
             system.n_replicas,
             system.n_molecules,
@@ -243,7 +246,7 @@ class EnvironmentProviderNeighborList(MDNeighborList):
             3,
             device=system.device,
         )
-
+        
         count = 0
         for r_idx in range(system.n_replicas):
             for m_idx in range(system.n_molecules):
@@ -261,11 +264,11 @@ class EnvironmentProviderNeighborList(MDNeighborList):
                     self.offsets = None
 
                 count += 1
-
+        
         self.max_neighbors = max_neighbors
         self.neighbor_mask = torch.zeros_like(self.neighbor_list)
         self.neighbor_mask[self.neighbor_list >= 0] = 1.0
-
+        
         # Mask away -1 indices for invalid atoms, since they do not work with torch.gather
         self.neighbor_list = self.neighbor_list * self.neighbor_mask.long()
 
@@ -287,7 +290,7 @@ class ASENeighborList(EnvironmentProviderNeighborList):
     Args:
         cutoff (float): Cutoff radius used for neighbor list construction.
         shell (float): Buffer region around the cutoff radius. A new neighbor list is only constructed if an atom
-                       moves farther than this shell. (Or if the simulation cell changes.)
+                    moves farther than this shell. (Or if the simulation cell changes.)
     """
 
     def __init__(self, cutoff, shell, device=None):
@@ -298,7 +301,7 @@ class ASENeighborList(EnvironmentProviderNeighborList):
     def _set_environment_provider(self):
         """
         Set the environment provider.
-        """
+        """        
         self._environment_provider = schnetpack.environment.AseEnvironmentProvider(
             self.provider_cutoff
         )
@@ -312,7 +315,7 @@ class TorchNeighborList(EnvironmentProviderNeighborList):
     Args:
         cutoff (float): Cutoff radius used for neighbor list construction.
         shell (float): Buffer region around the cutoff radius. A new neighbor list is only constructed if an atom
-                       moves farther than this shell. (Or if the simulation cell changes.)
+                    moves farther than this shell. (Or if the simulation cell changes.)
         device (torch.device): Device used when computing the neighbor list.
     """
 

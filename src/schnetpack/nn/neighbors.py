@@ -48,10 +48,10 @@ def atom_distances(
     ]
     # Get atomic positions of all neighboring indices
     pos_xyz = positions[idx_m, neighbors[:, :, :], :]
-
+    
     # Subtract positions of central atoms to get distance vectors
     dist_vec = pos_xyz - positions[:, :, None, :]
-
+    
     # add cell offset
     if cell is not None:
         B, A, N, D = cell_offsets.size()
@@ -59,11 +59,11 @@ def atom_distances(
         offsets = cell_offsets.bmm(cell)
         offsets = offsets.view(B, A, N, D)
         dist_vec += offsets
-
+    
     # Compute vector lengths
     distances = torch.norm(dist_vec, 2, 3)
-
-    if neighbor_mask is not None:
+    
+    if neighbor_mask is not None:#! I did not edi but neighbor_mask has problem
         # Avoid problems with zero distances in forces (instability of square
         # root derivative at 0) This way is neccessary, as gradients do not
         # work with inplace operations, such as e.g.
