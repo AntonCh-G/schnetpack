@@ -134,18 +134,35 @@ class TorchEnvironmentProvider(BaseEnvironmentProvider):
         """
         self.cutoff = cutoff
         self.device = device
+    def get_environment_HDF5(self, species, coordinates, pbc=None, cell=None):
+        species = torch.FloatTensor(species).to(self.device)
+        n_atoms = species.shape[0]
+        coordinates = torch.FloatTensor(coordinates).to(self.device)
+        if pbc is None:
+            pbc = torch.Tensor([0,0,0], dtype=torch.bool).to(self.device)
+        else:
+            pbc = torch.tensor(pbc, dtype=torch.bool).to(self.device)
+        if cell is None:
+            cell = torch.eye(3, dtype=species.dtype).to(self.device)
+        else:
+            cell = torch.Tensor(cell).to(self.device)
+        return self._get_environment(species, coordinates, n_atoms, pbc,cell)
 
     def get_environment(self, atoms):
 
         species = torch.FloatTensor(atoms.numbers).to(self.device)
         coordinates = torch.FloatTensor(atoms.positions).to(self.device)
         pbc = torch.from_numpy(atoms.pbc.astype("uint8")).to(self.device)
+        n_atoms = atoms.get_global_number_of_atoms()
 
         if not atoms.cell.any():
             cell = torch.eye(3, dtype=species.dtype).to(self.device)
         else:
             cell = torch.Tensor(atoms.cell).to(self.device)
+        return self._get_environment(species, coordinates, n_atoms, pbc,cell)
 
+    def _get_environment(self, species, coordinates, n_atoms, pbc, cell):
+        
         shifts = compute_shifts(cell=cell, pbc=pbc, cutoff=self.cutoff)
 
         # The returned indices are only one directional
@@ -162,7 +179,6 @@ class TorchEnvironmentProvider(BaseEnvironmentProvider):
         bi_idx_j = np.hstack((idx_j, idx_i))
         bi_idx_S = np.vstack((-idx_S, idx_S))
 
-        n_atoms = atoms.get_global_number_of_atoms()
         if bi_idx_i.shape[0] > 0:
             uidx, n_nbh = np.unique(bi_idx_i, return_counts=True)
             n_max_nbh = np.max(n_nbh)

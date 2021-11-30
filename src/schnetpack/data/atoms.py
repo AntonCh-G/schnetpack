@@ -10,6 +10,7 @@ References
    The atomic simulation environment -- a Python library for working with atoms.
    Journal of Physics: Condensed Matter, 9, 27. 2017.
 """
+import json
 
 import logging
 import os
@@ -18,7 +19,9 @@ import bisect
 
 import numpy as np
 import torch
+from ase.data import atomic_masses
 from ase.db import connect
+import h5py
 from torch.utils.data import Dataset, ConcatDataset, Subset
 
 import schnetpack as spk
@@ -37,6 +40,7 @@ __all__ = [
     "AtomsConverter",
     "get_center_of_mass",
     "get_center_of_geometry",
+    "AtomsDataHDF5"
 ]
 
 
@@ -70,6 +74,140 @@ def get_center_of_geometry(atoms):
 class AtomsDataError(Exception):
     pass
 
+class AtomsDataHDF5(Dataset):
+    def __init__(self, path_to_hdf5, 
+                available_properties = None,
+                units = None,
+                environment_provider = SimpleEnvironmentProvider(),
+                centering_function=True):
+        if not path_to_hdf5.endswith(".hdf5"):
+            raise AtomsDataError("Invalid path_to_hdf5! Please make sure to add the file extension '.hdf5' to "
+                "your path_to_hdf5.")
+        
+        self.path_to_hdf5 = path_to_hdf5
+        self.skip_initial = 0
+        self.database = h5py.File(self.path_to_hdf5, "r", swmr=True, libver="latest")
+        
+        self.properties = {}
+        self._load_molecule_data()
+        self._load_properties()
+
+        # Do formatting for info
+        self._available_properties = list(self.properties.keys())
+        if len(self._available_properties) == 1:
+            self._available_properties = str(self._available_properties[0])
+        else:
+            self._available_properties = (
+                ", ".join(self._available_properties[:-1]) + " and " + self._available_properties[-1]
+            )
+
+        logging.info(
+            "Loaded properties {:s} from {:s}".format(self._available_properties, self.path_to_hdf5)
+        )
+        if units is None:
+            units = [1.0]*len(self._available_properties)
+        self.units = dict(zip(self._available_properties, units))
+
+        if len(units) != len(self._available_properties):
+            raise AtomsDataError(
+                "The length of available properties and units does not match!"
+            )
+        
+        self.environment_provider = environment_provider
+        self.centering_function = centering_function
+
+    def __len__(self):
+        return self.total_entries
+
+    def __getitem__(self, idx):
+        properties = self.get_properties(idx)
+        properties["_idx"] = np.array([idx], dtype=np.int)
+
+        return torchify_dict(properties)
+
+    def get_properties(self, idx):
+        step_propertie = {}
+        for key in self.properties:
+            if key!='energy':#and key!='velocities'
+                step_propertie[key] = self.properties[key][idx].squeeze()
+            elif key=='energy':
+                step_propertie[key] = self.properties[key][idx].reshape(-1)
+        if self.centering_function:
+            masses = atomic_masses[step_propertie[Properties.Z]]
+            centering = np.dot(masses,step_propertie[Properties.R]) / masses.sum()
+            step_propertie[Properties.R]-=centering
+        step_propertie = step_propertie
+        nbh_idx, offsets = self.environment_provider.get_environment_HDF5(step_propertie[Properties.Z], step_propertie[Properties.R], step_propertie[Properties.pbc], step_propertie[Properties.cell])
+        step_propertie[Properties.neighbors] = nbh_idx
+        step_propertie[Properties.cell_offset] = offsets
+        return step_propertie
+
+    def _load_molecule_data(self):
+        # This is for molecule streams
+        structures = self.database["molecules"]
+
+        # General database info
+        self.n_replicas = int(structures.attrs["n_replicas"])
+        self.n_molecules = int(structures.attrs["n_molecules"])
+        self.n_atoms = int(structures.attrs["n_atoms"])
+        self.total_entries = int(structures.attrs["entries"])
+        self.time_step = structures.attrs["time_step"]
+        self.entries = self.total_entries - self.skip_initial
+
+        # Write to main property dictionary
+        if structures.ndim == 4:
+            self._load_structures(structures)
+    
+    def _load_structures(self, structures):
+        self.properties[Properties.Z] = structures.attrs["atom_types"][0]
+
+        # Get length of position and velocity blocks
+        max_n_atoms = structures.attrs["max_n_atoms"]
+        block_length = 3 * max_n_atoms
+        self.pbc = structures.attrs["pbc"]
+        self.properties[Properties.pbc] = self.pbc.astype(np.int)
+        # Get positions
+        self.properties[Properties.R] = structures[
+            self.skip_initial : self.total_entries, ..., :block_length
+        ].reshape((self.entries, self.n_replicas, self.n_molecules, max_n_atoms, 3))
+        # # Get velocities
+        # self.properties["velocities"] = structures[
+        #     self.skip_initial : self.total_entries, ..., block_length : 2 * block_length
+        # ].reshape((self.entries, self.n_replicas, self.n_molecules, max_n_atoms, 3))
+
+        # Get cells if present
+        if structures.shape[-1] > 2 * block_length:
+            self.properties[Properties.cell] = structures[
+                self.skip_initial : self.total_entries, ..., 2 * block_length :
+            ].reshape((self.entries, self.n_replicas, self.n_molecules, 3, 3))
+        else:
+            self.properties[Properties.cell] = None
+    
+    def _load_properties(self):
+        """
+        Load properties and their shape from the corresponding group in the hdf5 database.
+        Properties are then reshaped to original form and stores in the self.properties dictionary.
+        """
+        # And for property stream
+        properties = self.database["properties"]
+        property_shape = json.loads(properties.attrs["shapes"])
+        property_positions = json.loads(properties.attrs["positions"])
+
+        self.skip_initial = 0
+        # Reformat properties
+        for prop in property_positions:
+            prop_pos = slice(*property_positions[prop])
+            self.properties[prop] = properties[
+                self.skip_initial : self.total_entries, :, :, prop_pos
+            ].reshape(
+                (
+                    self.total_entries - self.skip_initial,
+                    self.n_replicas,
+                    self.n_molecules,
+                    *property_shape[prop],
+                )
+            )
+    
 
 class AtomsData(Dataset):
     """
@@ -605,7 +743,7 @@ class AtomsDataSubset(Subset):
         return self.dataset.get_atomref(properties)
 
     def get_properties(self, idx, load_only=None):
-        return self.dataset.get_properties(self.indices[idx], load_only)
+        return self.dataset.get_properties(idx, load_only)
 
     def set_load_only(self, load_only):
         # check if properties are available
@@ -631,7 +769,7 @@ class AtomsDataSubset(Subset):
         return create_subset(self, subset)
 
     def __getitem__(self, idx):
-        _, properties = self.get_properties(idx, self.load_only)
+        _, properties = self.get_properties(self.indices[idx], self.load_only)
         properties["_idx"] = np.array([idx], dtype=np.int)
 
         return torchify_dict(properties)
@@ -677,7 +815,7 @@ def _convert_atoms(
     inputs[Properties.R] = positions
 
     # get atom environment
-    nbh_idx, offsets = environment_provider.get_environment(atoms)
+    nbh_idx, offsets = environment_provider.get_environment(atoms = atoms)
 
     # Get neighbors and neighbor mask
     inputs[Properties.neighbors] = nbh_idx.astype(np.int)
