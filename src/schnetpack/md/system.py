@@ -4,6 +4,7 @@ It includes functionality for loading molecules from files.
 All this functionality is encoded in the :obj:`schnetpack.md.System` class.
 """
 import torch
+import numpy as np
 from ase.io import read
 
 from schnetpack.md.utils import MDUnits, compute_centroid, batch_inverse
@@ -348,10 +349,10 @@ class System:
         for idx_r in range(self.n_replicas):
             for idx_m in range(self.n_molecules):
                 positions = (
-                    self.positions[idx_r, idx_m, : self.n_atoms[idx_m]]
+                    np.copy(self.positions[idx_r, idx_m, : self.n_atoms[idx_m]]
                     .cpu()
                     .detach()
-                    .numpy()
+                    .numpy())
                 )
                 atom_types = (
                     self.atom_types[idx_r, idx_m, : self.n_atoms[idx_m]]
@@ -360,7 +361,7 @@ class System:
                     .numpy()
                 )
                 if self.cells is not None:
-                    cell = self.cells[idx_r, idx_m].cpu().detach().numpy()
+                    cell = np.copy(self.cells[idx_r, idx_m].cpu().detach().numpy())
                     pbc = self.pbc[idx_m].cpu().detach().numpy()
                 else:
                     cell = None
