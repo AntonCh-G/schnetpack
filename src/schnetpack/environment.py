@@ -190,7 +190,7 @@ class TorchEnvironmentProvider(BaseEnvironmentProvider):
 
             mask = np.zeros((n_atoms, np.max(n_max_nbh)), dtype=np.bool)
             mask[uidx, :] = nbh_range < n_nbh
-            neighborhood_idx = -np.ones((n_atoms, np.max(n_max_nbh)), dtype=np.float32)
+            neighborhood_idx = -np.ones((n_atoms, np.max(n_max_nbh)), dtype=np.int)#float32)
             offset = np.zeros((n_atoms, np.max(n_max_nbh), 3), dtype=np.float32)
 
             # Assign neighbors and offsets according to the indices in bi_idx_i, since in contrast
@@ -201,7 +201,7 @@ class TorchEnvironmentProvider(BaseEnvironmentProvider):
                 offset[idx, mask[idx]] = bi_idx_S[bi_idx_i == idx]
 
         else:
-            neighborhood_idx = -np.ones((n_atoms, 1), dtype=np.float32)
+            neighborhood_idx = -np.ones((n_atoms, 1), dtype=np.int)#np.float32)
             offset = np.zeros((n_atoms, 1, 3), dtype=np.float32)
 
         return neighborhood_idx, offset

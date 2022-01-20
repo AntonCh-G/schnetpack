@@ -54,7 +54,7 @@ class SGDMLCalculator(MDCalculator):
             position_conversion,
             force_conversion,
             property_conversion,
-            detach,
+            detach = detach,
         )
 
         self.model = model
