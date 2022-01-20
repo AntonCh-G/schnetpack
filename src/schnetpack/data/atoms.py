@@ -116,6 +116,7 @@ class AtomsDataHDF5(Dataset):
         self.environment_provider = environment_provider
         self.centering_function = centering_function
 
+        self._load_only = None
     def __len__(self):
         return self.total_entries
 
@@ -125,13 +126,16 @@ class AtomsDataHDF5(Dataset):
 
         return torchify_dict(properties)
 
-    def get_properties(self, idx):
+    def get_properties(self, idx, load_only=None):
         step_propertie = {}
         for key in self.properties:
-            if key!='energy':#and key!='velocities'
+            if key!='energy' and key!=Properties.Z and key!=Properties.pbc:
+                # print (key,self.properties[key])
                 step_propertie[key] = self.properties[key][idx].squeeze()
             elif key=='energy':
                 step_propertie[key] = self.properties[key][idx].reshape(-1)
+            else:
+                step_propertie[key] = self.properties[key].squeeze()
         if self.centering_function:
             masses = atomic_masses[step_propertie[Properties.Z]]
             centering = np.dot(masses,step_propertie[Properties.R]) / masses.sum()
@@ -207,6 +211,12 @@ class AtomsDataHDF5(Dataset):
                     *property_shape[prop],
                 )
             )
+
+    @property
+    def load_only(self):
+        if self._load_only is None:
+            return self._available_properties
+        return self._load_only
     
 
 class AtomsData(Dataset):
@@ -391,6 +401,13 @@ class AtomsData(Dataset):
             output=properties,
         )
 
+        #!Anton
+        with connect(self.dbpath) as conn:
+            row_ = conn.get(1)
+            nbh_idx, offsets = self.environment_provider.get_environment(atoms = row_.toatoms())
+            properties[Properties.neighbors] = nbh_idx.astype(np.int)
+            properties[Properties.cell_offset] = offsets.astype(np.float32)
+        #!Anton end
         return at, properties
 
     def get_atoms(self, idx):
@@ -769,7 +786,9 @@ class AtomsDataSubset(Subset):
         return create_subset(self, subset)
 
     def __getitem__(self, idx):
-        _, properties = self.get_properties(self.indices[idx], self.load_only)
+        properties = self.get_properties(self.indices[idx], self.load_only)
+        if type(properties) is tuple:
+            properties = properties[-1]
         properties["_idx"] = np.array([idx], dtype=np.int)
 
         return torchify_dict(properties)
