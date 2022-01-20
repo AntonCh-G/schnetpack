@@ -2,6 +2,7 @@ import os
 import sys
 import numpy as np
 import torch
+from tqdm import tqdm
 
 
 class Trainer:
@@ -160,103 +161,105 @@ class Trainer:
             h.on_train_begin(self)
 
         try:
-            for _ in range(n_epochs):
-                # increase number of epochs by 1
-                self.epoch += 1
-
-                for h in self.hooks:
-                    h.on_epoch_begin(self)
-
-                if self._stop:
-                    # decrease self.epoch if training is aborted on epoch begin
-                    self.epoch -= 1
-                    break
-
-                # perform training epoch
-                #                if progress:
-                #                    train_iter = tqdm(self.train_loader)
-                #                else:
-                train_iter = self.train_loader
-
-                self._model.train()
-                for train_batch in train_iter:
-                    self.optimizer.zero_grad()
+            with tqdm(range(n_epochs), unit='epoch') as tqdm_epoch:
+                for _ in tqdm_epoch:
+                    # increase number of epochs by 1
+                    self.epoch += 1
 
                     for h in self.hooks:
-                        h.on_batch_begin(self, train_batch)
+                        h.on_epoch_begin(self)
 
-                    # move input to gpu, if needed
-                    train_batch = {k: v.to(device) for k, v in train_batch.items()}
+                    if self._stop:
+                        # decrease self.epoch if training is aborted on epoch begin
+                        self.epoch -= 1
+                        break
 
-                    result = self._model(train_batch)
-                    loss = self.loss_fn(train_batch, result)
-                    loss.backward()
-                    self.optimizer.step()
-                    self.step += 1
+                    # perform training epoch
+                    #                if progress:
+                    #                    train_iter = tqdm(self.train_loader)
+                    #                else:
+                    train_iter = self.train_loader
+
+                    self._model.train()
+                    for train_batch in train_iter:
+                        self.optimizer.zero_grad()
+
+                        for h in self.hooks:
+                            h.on_batch_begin(self, train_batch)
+
+                        # move input to gpu, if needed
+                        train_batch = {k: v.to(device) for k, v in train_batch.items()}
+
+                        result = self._model(train_batch)
+                        loss = self.loss_fn(train_batch, result)
+                        loss.backward()
+                        self.optimizer.step()
+                        self.step += 1
+
+                        for h in self.hooks:
+                            h.on_batch_end(self, train_batch, result, loss)
+
+                        if self._stop:
+                            break
+
+                    if self.epoch % self.checkpoint_interval == 0:
+                        self.store_checkpoint()
+
+                    # validation
+                    self._model.eval()
+                    if self.epoch % self.validation_interval == 0 or self._stop:
+                        for h in self.hooks:
+                            h.on_validation_begin(self)
+
+                        val_loss = 0.0
+                        n_val = 0
+                        for val_batch in self.validation_loader:
+                            # append batch_size
+                            vsize = list(val_batch.values())[0].size(0)
+                            n_val += vsize
+
+                            for h in self.hooks:
+                                h.on_validation_batch_begin(self)
+
+                            # move input to gpu, if needed
+                            val_batch = {k: v.to(device) for k, v in val_batch.items()}
+
+                            val_result = self._model(val_batch)
+                            val_batch_loss = (
+                                self.loss_fn(val_batch, val_result).data.cpu().numpy()
+                            )
+                            if self.loss_is_normalized:
+                                val_loss += val_batch_loss * vsize
+                            else:
+                                val_loss += val_batch_loss
+
+                            for h in self.hooks:
+                                h.on_validation_batch_end(self, val_batch, val_result)
+
+                        # weighted average over batches
+                        if self.loss_is_normalized:
+                            val_loss /= n_val
+                            
+                        if self.best_loss > val_loss:
+                            self.best_loss = val_loss
+                            torch.save(self._model, self.best_model)
+
+                        for h in self.hooks:
+                            h.on_validation_end(self, val_loss)
 
                     for h in self.hooks:
-                        h.on_batch_end(self, train_batch, result, loss)
+                        h.on_epoch_end(self)
 
                     if self._stop:
                         break
-
-                if self.epoch % self.checkpoint_interval == 0:
-                    self.store_checkpoint()
-
-                # validation
-                self._model.eval()
-                if self.epoch % self.validation_interval == 0 or self._stop:
-                    for h in self.hooks:
-                        h.on_validation_begin(self)
-
-                    val_loss = 0.0
-                    n_val = 0
-                    for val_batch in self.validation_loader:
-                        # append batch_size
-                        vsize = list(val_batch.values())[0].size(0)
-                        n_val += vsize
-
-                        for h in self.hooks:
-                            h.on_validation_batch_begin(self)
-
-                        # move input to gpu, if needed
-                        val_batch = {k: v.to(device) for k, v in val_batch.items()}
-
-                        val_result = self._model(val_batch)
-                        val_batch_loss = (
-                            self.loss_fn(val_batch, val_result).data.cpu().numpy()
-                        )
-                        if self.loss_is_normalized:
-                            val_loss += val_batch_loss * vsize
-                        else:
-                            val_loss += val_batch_loss
-
-                        for h in self.hooks:
-                            h.on_validation_batch_end(self, val_batch, val_result)
-
-                    # weighted average over batches
-                    if self.loss_is_normalized:
-                        val_loss /= n_val
-
-                    if self.best_loss > val_loss:
-                        self.best_loss = val_loss
-                        torch.save(self._model, self.best_model)
-
-                    for h in self.hooks:
-                        h.on_validation_end(self, val_loss)
-
+                    tqdm_epoch.set_postfix(train_loss = loss.item() ,val_loss = val_loss)
+                #
+                # Training Ends
+                #
+                # run hooks & store checkpoint
                 for h in self.hooks:
-                    h.on_epoch_end(self)
-
-                if self._stop:
-                    break
-            #
-            # Training Ends
-            #
-            # run hooks & store checkpoint
-            for h in self.hooks:
-                h.on_train_ends(self)
-            self.store_checkpoint()
+                    h.on_train_ends(self)
+                self.store_checkpoint()
 
         except Exception as e:
             for h in self.hooks:
