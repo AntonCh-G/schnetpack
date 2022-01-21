@@ -158,7 +158,7 @@ class TorchEnvironmentProvider(BaseEnvironmentProvider):
         if not atoms.cell.any():
             cell = torch.eye(3, dtype=species.dtype).to(self.device)
         else:
-            cell = torch.Tensor(atoms.cell).to(self.device)
+            cell = torch.Tensor(np.array(atoms.cell)).to(self.device)
         return self._get_environment(species, coordinates, n_atoms, pbc,cell)
 
     def _get_environment(self, species, coordinates, n_atoms, pbc, cell):
