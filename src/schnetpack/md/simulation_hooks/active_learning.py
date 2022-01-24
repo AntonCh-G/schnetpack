@@ -81,12 +81,21 @@ def _create_task_from_model(model, dataset, sig):
 
 
 class Active_Learning_sGDML(SimulationHook):
-    def __init__(self,  true_calculator, error_check_func, path_to_sgdml_model, path_to_sgdml_traning_dataset) -> None:
+    def __init__(self,  true_calculator, error_check_func, system, path_to_new_dataset: str, path_to_sgdml_model: str, path_to_sgdml_traning_dataset: str, max_number_traj_in_mem = 5000) -> None:
         super(Active_Learning_sGDML, self).__init__()
+        self.path_to_new_dataset = path_to_new_dataset
         self.calculator = true_calculator
         self.error_check_func = error_check_func
         self.path_to_sgdml_model = path_to_sgdml_model
         self.path_to_sgdml_traning_dataset = path_to_sgdml_traning_dataset
+        self.current_number_of_bad_points = 0
+        self.number_of_files = 0
+        self.max_number_traj_in_mem = max_number_traj_in_mem
+        self.z = system.atom_types.to('cpu').detach().numpy().flatten()
+        self.n_atoms = len(self.z)
+        self.bad_point_R_array = np.zeros((max_number_traj_in_mem, self.n_atoms, 3))
+        self.bad_point_F_array = np.zeros((max_number_traj_in_mem, self.n_atoms, 3))
+        self.bad_point_E_array = np.zeros((max_number_traj_in_mem, 1))
 
     def on_step_middle(self, simulator):
         self.on_simulation_start(simulator)
@@ -96,14 +105,44 @@ class Active_Learning_sGDML(SimulationHook):
         inputs = self.calculator._generate_input(system)
         results = self.calculator.model(inputs)
 
-        if self.error_check_func(system.forces, results['forces']*self.calculator.force_conversion):
-            path_to_new_datset = self._add_point_to_traning_dataset(simulator, results)
-            self.train_new_sgdml_model(path_to_new_datset, simulator)
+        if self.error_check_func(system.forces/self.calculator.force_conversion, results['forces']):
+            if  self.current_number_of_bad_points < self.max_number_traj_in_mem:
+                print ('add point ...')
+                self._add_point_to_bad_point_arrays(simulator, results)
+                if simulator.step == simulator.n_steps - 1:
+                    self._save_current_bad_point_arrays()
+            else:
+                self._save_current_bad_point_arrays()
         else:
-            print ('Lame')
+            print ('no need to add point')
+
+
+    def _save_current_bad_point_arrays(self):
+        print ('save ...')
+        train_dataset = dict(np.load(self.path_to_sgdml_traning_dataset,allow_pickle=True))
+        new_dataset_path = self.path_to_new_dataset.split('.npz')[0] +'_'+str(self.number_of_files)+'_bad_points.npz'
+        # if os.path.exists(new_dataset_path):
+        #     new_dataset_path = self.path_to_sgdml_traning_dataset.split('.npz')[0]+'_'+str(self.number_of_files)+'_bad_points.npz'
+        train_dataset['R'] = self.bad_point_R_array
+        train_dataset['F'] = self.bad_point_F_array
+        train_dataset['E'] = self.bad_point_E_array
+        train_dataset['md5'] = dataset_md5(train_dataset)
+        np.savez_compressed(new_dataset_path, **train_dataset)
+        self.current_number_of_bad_points = 0
+        self.bad_point_R_array *= 0
+        self.bad_point_F_array *= 0
+        self.bad_point_E_array *= 0
+        self.number_of_files +=1
+
+
+    def _add_point_to_bad_point_arrays(self, simulator, true_results):
+        self.bad_point_R_array[self.current_number_of_bad_points] = (simulator.system.positions[0] * self.calculator.position_conversion).to('cpu').detach().numpy()
+        self.bad_point_F_array[self.current_number_of_bad_points] = (true_results['forces']*self.calculator.force_conversion).to('cpu').detach().numpy()
+        self.bad_point_E_array[self.current_number_of_bad_points] = (true_results['energy']).to('cpu').detach().numpy()
+        self.current_number_of_bad_points += 1
+        # pass
 
     def _add_point_to_traning_dataset(self, simulator, true_results):
-        print ('_add_point_to_traning_dataset')
         model = dict(np.load(self.path_to_sgdml_model,allow_pickle=True))
         train_dataset = dict(np.load(self.path_to_sgdml_traning_dataset,allow_pickle=True))
 
@@ -120,25 +159,16 @@ class Active_Learning_sGDML(SimulationHook):
         R_train = np.concatenate([R_train_old,R_new_point])
         E_train = np.concatenate([E_train_old,E_new_point])
         F_train = np.concatenate([F_train_old,F_new_point])
-        base_vars = {
-        'type': 'd',
-        'code_version': '',
-        'name': 'Cu8',
-        'theory': '',
-        'R': R_train,
-        'z': model['z'],
-        'F': F_train,
-        'E': E_train,
-        'e_unit': 'kcal/mol',
-        'r_unit': 'Ang',
-        'lattice': model['lattice'],
-        'idxs_train': idxs_train
-        }
-        print (model.keys())
-        base_vars['md5'] = dataset_md5(base_vars)
-        print (base_vars['md5'])
-        new_dataset_path = self.path_to_sgdml_traning_dataset.split('.n')[0]+'_'+str(len(R_train))+'.npz'
-        np.savez_compressed(new_dataset_path, **base_vars)
+
+        train_dataset['R'] = R_train
+        train_dataset['E'] = E_train
+        train_dataset['F'] = F_train
+        train_dataset['idxs_train'] = idxs_train
+        # print (model.keys())
+        # base_vars['md5'] = dataset_md5(base_vars)
+        # print (base_vars['md5'])
+        new_dataset_path = self.path_to_sgdml_traning_dataset.split('.n')[0]+'_'+str(len(idxs_train))+'.npz'
+        np.savez_compressed(new_dataset_path, **train_dataset)
         return new_dataset_path
 
     def train_new_sgdml_model(self, path_to_dataset,simulator):
