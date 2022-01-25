@@ -4,7 +4,6 @@ from sgdml.utils.io import dataset_md5
 from sgdml import __version__
 from sgdml.cli import create, train, validate, select, test
 from sgdml.utils import io, ui
-from turtle import position
 import multiprocessing as mp
 
 import h5py
